@@ -1,0 +1,414 @@
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
+from tensorflow.keras.applications import DenseNet121
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras import layers, models, optimizers, callbacks
+
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Veri yolu
+df = pd.read_csv("/content/drive/MyDrive/Teknofest2024/dataset_labels.csv")
+
+# Veriyi stratified şekilde ayır
+train_df, temp_df = train_test_split(df, test_size=0.3, stratify=df['label'], random_state=42)
+val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df['label'], random_state=42)
+
+# Class weight hesapla
+class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(train_df['label']), y=train_df['label'])
+class_weights_dict = {i: class_weights[i] for i in range(len(class_weights))}
+
+# Etiketleri string'e çevir
+for subset in [train_df, val_df, test_df]:
+    subset['label'] = subset['label'].astype(str)
+
+# Görsel boyutu ve batch size
+IMG_SIZE = (224, 224)
+BATCH_SIZE = 64
+
+# Generator fonksiyonu
+def create_generator(df, augment=False):
+    datagen = ImageDataGenerator(
+        rescale=1./255,
+        rotation_range=10 if augment else 0,
+        width_shift_range=0.1 if augment else 0,
+        height_shift_range=0.1 if augment else 0,
+        horizontal_flip=True if augment else False
+    )
+    return datagen.flow_from_dataframe(
+        dataframe=df,
+        x_col='path',
+        y_col='label',
+        target_size=IMG_SIZE,
+        batch_size=BATCH_SIZE,
+        class_mode='binary',
+        shuffle=True
+    )
+
+# Generator'ları oluştur
+train_gen = create_generator(train_df, augment=True)
+val_gen = create_generator(val_df)
+test_gen = create_generator(test_df)
+
+# GPU belleğini dinamik kullan (Colab'da faydalı olur)
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print("GPU bellek yönetimi ayarlandı.")
+    except RuntimeError as e:
+        print(e)
+
+# Sadece bir kez çalıştır
+!mkdir -p /content/local_dataset
+!cp -r /content/drive/MyDrive/Teknofest2024/converted/* /content/local_dataset/
+!cp /content/drive/MyDrive/Teknofest2024/dataset_labels.csv /content/
+
+# CSV'deki yol kolonunu güncelle
+df = pd.read_csv("/content/dataset_labels.csv")
+df['path'] = df['path'].str.replace('/content/drive/MyDrive/Teknofest2024/converted', '/content/local_dataset')
+
+# Model
+base_model = DenseNet121(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+# Son 50 katmanı açıyoruz (isteğe göre değişebilir)
+for layer in base_model.layers[-50:]:
+    layer.trainable = True
+
+
+model = models.Sequential([
+    base_model,
+    layers.GlobalAveragePooling2D(),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(64, activation='relu'),
+    layers.Dropout(0.2),
+    layers.Dense(1, activation='sigmoid')
+])
+
+model.compile(
+    loss='binary_crossentropy',
+    optimizer=optimizers.Adam(learning_rate=1e-5),
+    metrics=['accuracy']
+)
+
+# Callbacks
+checkpoint = callbacks.ModelCheckpoint(
+    "/content/drive/MyDrive/Teknofest2024/densenet121_inme_model_v2.keras",
+    monitor='val_accuracy',
+    save_best_only=True,
+    verbose=1
+)
+
+early_stop = callbacks.EarlyStopping(
+    monitor='val_loss',
+    patience=5,
+    restore_best_weights=True
+)
+
+# Modeli eğit
+history = model.fit(
+    train_gen,
+    validation_data=val_gen,
+    epochs=20,
+    callbacks=[checkpoint, early_stop],
+    class_weight=class_weights_dict
+)
+
+import numpy as np
+from sklearn.metrics import f1_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# Model zaten bellekte yüklü değilse yeniden yükleyebilirsin:
+from tensorflow.keras.models import load_model
+model = load_model("/content/drive/MyDrive/Teknofest2024/densenet121_inme_model_v2_final.keras")
+
+# Tahmin al
+y_pred_prob = model.predict(test_gen, verbose=1)
+y_pred = (y_pred_prob > 0.5).astype(int).flatten()  # Eşik: 0.5
+
+# Gerçek etiketleri al
+y_true = test_gen.classes
+
+# dataset_labels.csv'den yeniden böl
+df = pd.read_csv("/content/drive/MyDrive/Teknofest2024/dataset_labels.csv")
+
+from sklearn.model_selection import train_test_split
+df['label'] = df['label'].astype(str)
+
+train_df, temp_df = train_test_split(df, test_size=0.3, stratify=df['label'], random_state=42)
+val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df['label'], random_state=42)
+
+# test_df tekrar oluşturulmuş oldu ✅
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+# Etiketli ana CSV'yi oku
+df = pd.read_csv("/content/drive/MyDrive/Teknofest2024/dataset_labels.csv")
+df['label'] = df['label'].astype(str)
+
+# Train/Val/Test olarak ayır (aynı oranla)
+train_df, temp_df = train_test_split(df, test_size=0.3, stratify=df['label'], random_state=42)
+val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df['label'], random_state=42)
+
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+IMG_SIZE = (224, 224)
+BATCH_SIZE = 32
+
+datagen = ImageDataGenerator(rescale=1./255)
+
+test_gen = datagen.flow_from_dataframe(
+    dataframe=test_df,
+    x_col='path',
+    y_col='label',
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode='binary',
+    shuffle=False
+)
+
+from tensorflow.keras.models import load_model
+model = load_model("/content/drive/MyDrive/Teknofest2024/densenet121_inme_model_v2.keras")
+
+# Tahmin (olasılık)
+y_pred_prob = model.predict(test_gen)
+y_pred = (y_pred_prob > 0.5).astype(int).flatten()  # threshold: 0.5
+
+# Gerçek etiketler
+y_true = test_gen.classes
+
+
+from sklearn.metrics import f1_score, classification_report
+
+f1 = f1_score(y_true, y_pred)
+print("✅ F1 Score (test set):", round(f1, 4))
+
+print("\nClassification Report:")
+print(classification_report(y_true, y_pred, digits=4))
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+
+cm = confusion_matrix(y_true, y_pred)
+
+plt.figure(figsize=(6,5))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.xlabel("Tahmin")
+plt.ylabel("Gerçek")
+plt.title("Karışıklık Matrisi (Test Seti)")
+plt.tight_layout()
+plt.savefig("/content/drive/MyDrive/Teknofest2024/test_confusion_matrix.png")
+plt.show()
+
+import matplotlib.pyplot as plt
+import os
+from sklearn.metrics import f1_score, precision_score, recall_score
+
+f1 = f1_score(y_true, y_pred)
+precision = precision_score(y_true, y_pred)
+recall = recall_score(y_true, y_pred)
+
+print("F1 Score:", round(f1, 4))
+print("Precision:", round(precision, 4))
+print("Recall:", round(recall, 4))
+
+
+# Drive'da klasör oluştur (eğer yoksa)
+save_dir = "/content/drive/MyDrive/Teknofest2024/YeniModelGrafikleri"
+os.makedirs(save_dir, exist_ok=True)
+
+# Grafik
+plt.figure(figsize=(6, 4))
+plt.bar(['Precision', 'Recall', 'F1 Score'], [precision, recall, f1], color=['#4c72b0', '#55a868', '#c44e52'])
+plt.ylim(0, 1)
+plt.title("Model Performans Skorları (Test Seti)")
+plt.ylabel("Skor")
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.tight_layout()
+
+# Kaydet
+plt.savefig(os.path.join(save_dir, "f1_precision_recall_chart.png"))
+plt.show()
+
+from sklearn.metrics import roc_curve, auc, precision_recall_curve
+
+# ROC Curve
+fpr, tpr, _ = roc_curve(y_true, y_pred_prob)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(6, 4))
+plt.plot(fpr, tpr, label=f"ROC Curve (AUC = {roc_auc:.4f})", color='darkorange')
+plt.plot([0, 1], [0, 1], linestyle='--', color='gray')
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("ROC Curve")
+plt.legend(loc="lower right")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig(os.path.join(save_dir, "roc_curve.png"))
+plt.show()
+
+# Precision-Recall Curve
+precision_vals, recall_vals, _ = precision_recall_curve(y_true, y_pred_prob)
+
+plt.figure(figsize=(6, 4))
+plt.plot(recall_vals, precision_vals, color='purple', label="Precision-Recall Curve")
+plt.xlabel("Recall")
+plt.ylabel("Precision")
+plt.title("Precision-Recall Curve")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig(os.path.join(save_dir, "precision_recall_curve.png"))
+plt.show()
+
+!mkdir -p ~/.kaggle
+!cp /content/drive/MyDrive/kaggle.json ~/.kaggle/
+!chmod 600 ~/.kaggle/kaggle.json
+
+!kaggle datasets download -d felipekitamura/head-ct-hemorrhage
+!unzip head-ct-hemorrhage.zip -d head_ct_dataset
+
+
+import pandas as pd
+import os
+
+# Etiket dosyasını oku
+df = pd.read_csv("/content/head_ct_dataset/labels.csv")
+df.head()
+
+
+external_df = pd.read_csv("/content/head_ct_dataset/labels.csv")
+
+# Sütun isimlerini temizle (boşluk, özel karakter vs.)
+external_df.columns = external_df.columns.str.strip().str.lower()
+
+external_df.head()
+
+external_df["path"] = external_df["id"].astype(str).apply(
+    lambda x: f"/content/head_ct_dataset/head_ct/{x}.png"
+)
+
+external_df["label"] = external_df["hemorrhage"].astype(str)
+external_df = external_df[["path", "label"]]
+external_df.head()
+
+import os
+
+for root, dirs, files in os.walk("/content/head_ct_dataset"):
+    for name in files:
+        if name.endswith(".png"):
+            print(os.path.join(root, name))
+            break  # Sadece ilkini göstermek için
+
+missing = external_df[~external_df["path"].apply(os.path.exists)]
+print("Eksik dosya sayısı:", len(missing))
+missing.head()
+
+# Yeniden oku ve sıfırdan oluştur
+external_df = pd.read_csv("/content/head_ct_dataset/labels.csv")
+external_df.columns = external_df.columns.str.strip().str.lower()
+
+# Yeni path sütunu oluştur (başında sıfır dolgusuyla)
+external_df["path"] = external_df["id"].apply(
+    lambda x: f"/content/head_ct_dataset/head_ct/head_ct/{int(x):03}.png"
+)
+
+# Label sütunu int olarak ayarla
+external_df["label"] = external_df["hemorrhage"].astype(int)
+
+# Sadece gerekli sütunları tut
+external_df = external_df[["path", "label"]]
+
+import matplotlib.pyplot as plt
+import cv2
+
+# Her sınıftan 3 örnek göster
+for label in [0, 1]:
+    sample_paths = external_df[external_df["label"] == label]["path"].head(3).tolist()
+    plt.figure(figsize=(12, 3))
+    for i, path in enumerate(sample_paths):
+        img = cv2.imread(path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        plt.subplot(1, 3, i+1)
+        plt.imshow(img, cmap='gray')
+        plt.title(f"Label: {label}")
+        plt.axis('off')
+    plt.suptitle(f"Örnek Görseller - Label {label}")
+    plt.show()
+
+# 1. Veri setini yükle
+external_df = pd.read_csv("/content/head_ct_dataset/labels.csv")
+external_df.columns = external_df.columns.str.strip().str.lower()
+external_df["path"] = external_df["id"].apply(lambda x: f"/content/head_ct_dataset/head_ct/head_ct/{int(x):03}.png")
+external_df["label"] = external_df["hemorrhage"].astype(str)  # 💥 String'e dönüştürdük!
+external_df = external_df[["path", "label"]]
+external_df = external_df[external_df["path"].apply(os.path.exists)].reset_index(drop=True)
+
+
+# 2. Generator oluştur
+datagen = ImageDataGenerator(rescale=1./255)
+external_gen = datagen.flow_from_dataframe(
+    dataframe=external_df,
+    x_col="path",
+    y_col="label",
+    target_size=(224, 224),
+    batch_size=32,
+    class_mode='binary',
+    shuffle=False
+)
+
+# 3. Modeli yükle
+model = load_model("/content/drive/MyDrive/Teknofest2024/densenet121_inme_model_v2_final.keras")
+
+# 4. Tahminler
+y_pred_prob = model.predict(external_gen, verbose=1)
+y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+y_true = external_gen.classes
+
+import matplotlib.pyplot as plt
+import cv2
+import os
+import numpy as np
+
+# En emin olunan ilk 10 görüntü için dosya yolları ve olasılıklar
+top_paths = [
+    "/content/head_ct_dataset/head_ct/head_ct/055.png",
+    "/content/head_ct_dataset/head_ct/head_ct/044.png",
+    "/content/head_ct_dataset/head_ct/head_ct/018.png",
+    "/content/head_ct_dataset/head_ct/head_ct/125.png",
+    "/content/head_ct_dataset/head_ct/head_ct/066.png",
+    "/content/head_ct_dataset/head_ct/head_ct/072.png",
+    "/content/head_ct_dataset/head_ct/head_ct/065.png",
+    "/content/head_ct_dataset/head_ct/head_ct/017.png",
+    "/content/head_ct_dataset/head_ct/head_ct/048.png",
+    "/content/head_ct_dataset/head_ct/head_ct/009.png"
+]
+
+# İlgili olasılık değerleri
+top_probs = [0.9995, 0.9995, 0.9994, 0.9993, 0.9992, 0.9989, 0.9989, 0.9987, 0.9986, 0.9986]
+
+# Grid çizimi
+plt.figure(figsize=(15, 6))
+
+for i, (path, prob) in enumerate(zip(top_paths, top_probs)):
+    img = cv2.imread(path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    plt.subplot(2, 5, i+1)
+    plt.imshow(img, cmap='gray')
+    plt.title(f"{os.path.basename(path)}\nOlasılık: {prob:.4f}")
+    plt.axis("off")
+
+plt.tight_layout()
+plt.suptitle("Modelin En Emin Olduğu İnme Vakaları (Top 10)", fontsize=16, y=1.05)
+plt.savefig("/content/drive/MyDrive/Teknofest2024/External_Validation/top_confident_predictions.png")
+plt.show()
